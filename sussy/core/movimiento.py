@@ -23,10 +23,26 @@ class CandidatoMovimiento:
     frames_sin_match: int = 0
     inicio_cx: float = 0.0
     inicio_cy: float = 0.0
+    vel_suma: float = 0.0
+    vel_muestras: int = 0
 
     def __post_init__(self) -> None:
         self.inicio_cx = self.cx
         self.inicio_cy = self.cy
+
+    def registrar_desplazamiento(self, nuevo_cx: float, nuevo_cy: float) -> float:
+        dist = hypot(nuevo_cx - self.cx, nuevo_cy - self.cy)
+        self.vel_suma += abs(dist)
+        self.vel_muestras += 1
+        self.cx = nuevo_cx
+        self.cy = nuevo_cy
+        return dist
+
+    @property
+    def velocidad_media(self) -> float:
+        if self.vel_muestras == 0:
+            return 0.0
+        return self.vel_suma / self.vel_muestras
 
 
 class DetectorMovimiento:
@@ -171,8 +187,7 @@ class DetectorMovimiento:
                 cand.y1 = y
                 cand.x2 = x + w
                 cand.y2 = y + h
-                cand.cx = cx
-                cand.cy = cy
+                cand.registrar_desplazamiento(cx, cy)
                 cand.frames_vivos += 1
                 cand.frames_sin_match = 0
                 usados.add(mejor_id)
@@ -228,6 +243,8 @@ class DetectorMovimiento:
             if desplazamiento < self.min_desplazamiento:
                 continue
 
+            ancho = cand.x2 - cand.x1
+            alto = cand.y2 - cand.y1
             det: Detection = {
                 "x1": cand.x1,
                 "y1": cand.y1,
@@ -235,6 +252,9 @@ class DetectorMovimiento:
                 "y2": cand.y2,
                 "clase": "movimiento",
                 "score": 0.5,
+                "area_px": max(1, ancho * alto),
+                "velocidad_px": cand.velocidad_media,
+                "frames_vivos": cand.frames_vivos,
             }
             detecciones.append(det)
 
