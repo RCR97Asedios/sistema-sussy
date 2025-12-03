@@ -21,6 +21,8 @@ from sussy.core.prediccion import PredictorMovimiento
 from sussy.core.visualizacion import dibujar_tracks
 from sussy.core.registro import RegistradorCSV
 from sussy.core.dataset_utils import guardar_crop
+from sussy.core.estabilidad_camara import MonitorEstabilidadCamara, DiagnosticoEstabilidad
+from sussy.core.texto import dibujar_texto
 
 
 def parse_args() -> argparse.Namespace:
@@ -195,12 +197,16 @@ def main() -> None:
     # --- INICIALIZACIÓN MODULAR ---
     tracker = None
     predictor_movimiento = None
+    crear_tracker = None
     if Config.USAR_TRACKER:
-        tracker = TrackerSimple(
-            max_dist=Config.TRACKER_MATCH_DIST,
-            max_frames_lost=Config.TRACKER_MAX_FRAMES_LOST,
-            iou_threshold=Config.TRACKER_IOU_THRESHOLD
-        )
+        def crear_tracker() -> TrackerSimple:
+            return TrackerSimple(
+                max_dist=Config.TRACKER_MATCH_DIST,
+                max_frames_lost=Config.TRACKER_MAX_FRAMES_LOST,
+                iou_threshold=Config.TRACKER_IOU_THRESHOLD,
+            )
+
+        tracker = crear_tracker()
         print(f"Tracker: ACTIVADO (Paciencia={Config.TRACKER_MAX_FRAMES_LOST}, IoU={Config.TRACKER_IOU_THRESHOLD})")
 
         if Config.USAR_PREDICCION_MOVIMIENTO:
@@ -225,11 +231,82 @@ def main() -> None:
             min_area=Config.MOVIMIENTO_AREA_MIN,
             contraste_min=Config.MOVIMIENTO_CONTRASTE_MIN,
             min_frames_vivos=Config.MOVIMIENTO_MIN_FRAMES,
-            min_desplazamiento=Config.MOVIMIENTO_MIN_DESPLAZAMIENTO
+            min_desplazamiento=Config.MOVIMIENTO_MIN_DESPLAZAMIENTO,
+            max_detecciones=Config.MOVIMIENTO_MAX_DETECCIONES,
         )
         print(f"Detector Movimiento: ACTIVADO (Umbral={Config.MOVIMIENTO_UMBRAL}, AreaMin={Config.MOVIMIENTO_AREA_MIN})")
     else:
         print("Detector Movimiento: DESACTIVADO")
+
+    monitor_estabilidad = None
+    camara_en_movimiento = False
+    diagnostico_camara = None
+    camara_mov_monitor = False
+    camara_mov_rafaga = False
+    camara_mov_rafaga_restante = 0
+    rafaga_consecutiva = 0
+    camara_mov_anomalia = False
+    camara_mov_anomalia_restante = 0
+    anomalia_consecutiva = 0
+    razon_movimiento = ""
+    font_path_ui = Config.UI_FONT_PATH
+    zoom_cooldown_restante = 0
+    ultimo_diag_monitor: Optional[DiagnosticoEstabilidad] = None
+    anomalia_motivo_actual = "anomalia"
+    prev_frame_zoom_small: Optional[np.ndarray] = None
+    motivo_monitor_actual = "estable"
+    if Config.USAR_MONITOR_ESTABILIDAD:
+        monitor_estabilidad = MonitorEstabilidadCamara(
+            escala=Config.CAMARA_ESCALA_ANALISIS,
+            max_desplazamiento_px=Config.CAMARA_MAX_DESPLAZAMIENTO_PX,
+            min_puntos=Config.CAMARA_MIN_PUNTOS,
+            max_ratio_perdidos=Config.CAMARA_MAX_RATIO_PERDIDOS,
+            frames_inestables_para_disparar=Config.CAMARA_FRAMES_INESTABLES,
+            frames_estables_para_recuperar=Config.CAMARA_FRAMES_ESTABLES,
+            activar_inmediato=Config.CAMARA_ACTIVACION_INMEDIATA,
+            max_cambio_escala=Config.CAMARA_MAX_CAMBIO_ESCALA,
+            max_ratio_diferencia=Config.CAMARA_MAX_RATIO_DIFERENCIA,
+        )
+        print(
+            "Monitor Estabilidad: ACTIVADO "
+            f"(max_shift={Config.CAMARA_MAX_DESPLAZAMIENTO_PX}px, "
+            f"min_pts={Config.CAMARA_MIN_PUNTOS})"
+        )
+    else:
+        print("Monitor Estabilidad: DESACTIVADO")
+
+    def reiniciar_componentes_movimiento() -> None:
+        nonlocal tracker, ultimos_tracks, camara_mov_rafaga_restante, rafaga_consecutiva, camara_mov_anomalia_restante, anomalia_consecutiva, zoom_cooldown_restante, anomalia_motivo_actual
+        if detector_movimiento:
+            detector_movimiento.resetear()
+        if crear_tracker:
+            tracker = crear_tracker()
+        if predictor_movimiento:
+            predictor_movimiento.consumir_zonas()
+        ultimos_tracks = []
+        camara_mov_rafaga_restante = 0
+        rafaga_consecutiva = 0
+        camara_mov_anomalia_restante = 0
+        anomalia_consecutiva = 0
+        zoom_cooldown_restante = 0
+        anomalia_motivo_actual = "anomalia"
+
+    def activar_bloqueo_movimiento(razon: str) -> None:
+        nonlocal camara_en_movimiento, razon_movimiento
+        if not camara_en_movimiento:
+            reiniciar_componentes_movimiento()
+        camara_en_movimiento = True
+        razon_movimiento = razon
+        if razon.startswith("monitor:zoom") and monitor_estabilidad:
+            monitor_estabilidad.resetear()
+
+    def desactivar_bloqueo_movimiento() -> None:
+        nonlocal camara_en_movimiento, razon_movimiento, camara_mov_rafaga_restante, camara_mov_anomalia_restante
+        if camara_en_movimiento:
+            camara_en_movimiento = False
+            razon_movimiento = ""
+            camara_mov_rafaga_restante = 0
+            camara_mov_anomalia_restante = 0
 
     if Config.USAR_YOLO:
         print(f"Detector YOLO: ACTIVADO (Modelo={Config.YOLO_MODELO})")
@@ -302,8 +379,8 @@ def main() -> None:
         if peticion_busqueda >= 0:
             indice_frame_actual = peticion_busqueda
             cap.set(cv2.CAP_PROP_POS_FRAMES, indice_frame_actual)
-            if tracker:
-                tracker = TrackerSimple() # Reiniciar tracker al saltar
+            if crear_tracker:
+                tracker = crear_tracker()  # Reiniciar tracker al saltar
             ultimos_tracks = []       # Limpiar tracks visuales
             peticion_busqueda = -1
             
@@ -325,7 +402,7 @@ def main() -> None:
                         ) or []
                     
                     detecciones_mov = []
-                    if detector_movimiento:
+                    if detector_movimiento and not camara_en_movimiento:
                         detecciones_mov = detector_movimiento.actualizar(frame)
                     
                     detecciones = combinar_detecciones(detecciones_yolo, detecciones_mov)
@@ -356,9 +433,79 @@ def main() -> None:
                 continue
             
             indice_frame_actual = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+
+            # Detección rápida de zoom basada en diff global reducido
+            if Config.CAMARA_ZOOM_FAST_RATIO > 0:
+                gray_small = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                # Solo ejecutar detector rápido si NO estamos ya en cooldown de zoom
+                if zoom_cooldown_restante == 0:
+                    gray_small = cv2.resize(
+                        gray_small,
+                        (max(32, int(gray_small.shape[1] * 0.1)), max(18, int(gray_small.shape[0] * 0.1))),
+                        interpolation=cv2.INTER_AREA,
+                    )
+                    if prev_frame_zoom_small is not None:
+                        diff_fast = cv2.absdiff(prev_frame_zoom_small, gray_small)
+                        ratio_fast = float(np.count_nonzero(diff_fast > 25)) / float(diff_fast.size)
+                        if ratio_fast >= Config.CAMARA_ZOOM_FAST_RATIO:
+                            zoom_fast_detectado = True
+                            zoom_cooldown_restante = Config.CAMARA_ZOOM_COOLDOWN_FRAMES
+                            activar_bloqueo_movimiento("monitor:zoom_fast")
+                            camara_mov_monitor = True
+                            motivo_monitor_actual = "zoom_fast"
+                            diagnostico_camara = None
+                            ultimo_diag_monitor = None
+                            prev_frame_zoom_small = gray_small
+                            continue
+                    prev_frame_zoom_small = gray_small
+            if camara_mov_rafaga_restante > 0:
+                camara_mov_rafaga_restante -= 1
+                camara_mov_rafaga = True
+            else:
+                camara_mov_rafaga = False
+
+            if camara_mov_anomalia_restante > 0:
+                camara_mov_anomalia_restante -= 1
+                camara_mov_anomalia = True
+            else:
+                camara_mov_anomalia = False
+
+            if zoom_cooldown_restante > 0:
+                zoom_cooldown_restante -= 1
+                camara_mov_monitor = True
+                motivo_monitor_actual = "zoom_hold"
+                diagnostico_camara = ultimo_diag_monitor
+            elif monitor_estabilidad:
+                camara_mov_monitor = monitor_estabilidad.actualizar(frame)
+                diagnostico_camara = monitor_estabilidad.diagnostico
+                ultimo_diag_monitor = diagnostico_camara
+                motivo_monitor_actual = getattr(monitor_estabilidad, "motivo", "monitor")
+                if camara_mov_monitor and motivo_monitor_actual.startswith("zoom"):
+                    zoom_cooldown_restante = Config.CAMARA_ZOOM_COOLDOWN_FRAMES
+            else:
+                camara_mov_monitor = False
+                diagnostico_camara = None
+                ultimo_diag_monitor = None
+                motivo_monitor_actual = "sin_monitor"
+
+            if camara_mov_monitor:
+                activar_bloqueo_movimiento(f"monitor:{motivo_monitor_actual}")
+            elif camara_mov_anomalia:
+                diagnostico_camara = None
+                activar_bloqueo_movimiento(anomalia_motivo_actual or "anomalia")
+            elif camara_mov_rafaga:
+                diagnostico_camara = None
+                activar_bloqueo_movimiento("rafaga")
+            else:
+                desactivar_bloqueo_movimiento()
             
             # --- PROCESAMIENTO ---
-            if indice_frame_actual % args.skip == 0:
+            tracks = []
+            if camara_en_movimiento:
+                ultimos_tracks = []
+                rafaga_consecutiva = 0
+                anomalia_consecutiva = 0
+            elif indice_frame_actual % args.skip == 0:
                 detecciones_yolo = []
                 if Config.USAR_YOLO:
                     detecciones_yolo = detectar(
@@ -390,10 +537,51 @@ def main() -> None:
 
                     if detecciones_predichas:
                         detecciones_yolo.extend(detecciones_predichas)
+
+                if Config.MOVIMIENTO_ANOMALIA_POSIBLE_DRON:
+                    total_pd_yolo = sum(
+                        1 for d in detecciones_yolo if d.get("clase") == "posible_dron"
+                    )
+                    if total_pd_yolo > Config.MOVIMIENTO_ANOMALIA_POSIBLE_DRON:
+                        anomalia_motivo_actual = "anomalia_posible_dron"
+                        activar_bloqueo_movimiento(anomalia_motivo_actual)
+                        camara_mov_anomalia_restante = max(
+                            camara_mov_anomalia_restante,
+                            Config.MOVIMIENTO_ANOMALIA_FRAMES_ENFRIAMIENTO,
+                        )
+                        camara_mov_anomalia = True
+                        diagnostico_camara = None
+                        anomalia_consecutiva = 0
+                        continue
                 
                 detecciones_mov = []
-                if detector_movimiento:
+                if detector_movimiento and not camara_en_movimiento:
                     detecciones_mov = detector_movimiento.actualizar(frame)
+                    total_movimientos = getattr(
+                        detector_movimiento, "ultimo_conteo_detecciones", 0
+                    )
+                    if Config.MOVIMIENTO_RAFAGA_BLOBS:
+                        if total_movimientos >= Config.MOVIMIENTO_RAFAGA_BLOBS:
+                            rafaga_consecutiva += 1
+                        else:
+                            rafaga_consecutiva = 0
+
+                        activacion = max(1, Config.MOVIMIENTO_RAFAGA_FRAMES_ACTIVACION)
+                        if rafaga_consecutiva >= activacion:
+                            diagnostico_camara = None
+                            activar_bloqueo_movimiento("rafaga")
+                            camara_mov_rafaga_restante = max(
+                                camara_mov_rafaga_restante,
+                                Config.MOVIMIENTO_RAFAGA_FRAMES,
+                            )
+                            camara_mov_rafaga = True
+                            rafaga_consecutiva = 0
+                            continue
+                    else:
+                        rafaga_consecutiva = 0
+                else:
+                    rafaga_consecutiva = 0
+                    total_movimientos = 0
                 
                 # --- NUEVA LÓGICA: FILTRO IA + DATASET ---
                 # Analizamos los objetos en movimiento que YOLO no vio
@@ -450,8 +638,42 @@ def main() -> None:
 
                 detecciones = combinar_detecciones(detecciones_yolo, detecciones_mov)
                 detecciones = evaluador_relevancia.filtrar(detecciones, frame.shape)
-                
-                tracks = []
+
+                anomalia_detectada = False
+                total_detecciones = len(detecciones)
+                if (
+                    Config.MOVIMIENTO_ANOMALIA_TOTAL
+                    and total_detecciones >= Config.MOVIMIENTO_ANOMALIA_TOTAL
+                ):
+                    anomalia_detectada = True
+
+                if Config.MOVIMIENTO_ANOMALIA_POSIBLE_DRON:
+                    total_posible_dron = sum(
+                        1 for d in detecciones if d.get("clase") == "posible_dron"
+                    )
+                    if total_posible_dron >= Config.MOVIMIENTO_ANOMALIA_POSIBLE_DRON:
+                        anomalia_detectada = True
+
+                if anomalia_detectada:
+                    anomalia_consecutiva += 1
+                else:
+                    anomalia_consecutiva = 0
+
+                activacion_anomalia = max(
+                    1, Config.MOVIMIENTO_ANOMALIA_FRAMES_ACTIVACION
+                )
+                if anomalia_consecutiva >= activacion_anomalia:
+                    anomalia_motivo_actual = "anomalia"
+                    activar_bloqueo_movimiento(anomalia_motivo_actual)
+                    camara_mov_anomalia_restante = max(
+                        camara_mov_anomalia_restante,
+                        Config.MOVIMIENTO_ANOMALIA_FRAMES_ENFRIAMIENTO,
+                    )
+                    camara_mov_anomalia = True
+                    diagnostico_camara = None
+                    anomalia_consecutiva = 0
+                    continue
+
                 if tracker:
                     tracks = tracker.actualizar(detecciones)
                     if predictor_movimiento:
@@ -470,8 +692,6 @@ def main() -> None:
                 
                 if logger is not None:
                     logger.registrar(indice_frame_actual, tracks)
-            else:
-                tracks = []
 
             procesar_eventos_alerta(
                 gestor_estado,
@@ -488,7 +708,61 @@ def main() -> None:
             # Info overlay
             if Config.MOSTRAR_UI:
                 texto = f"Frame {indice_frame_actual}/{total_frames} - objs: {len(tracks)}"
-                cv2.putText(frame, texto, (ancho - 350, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                dibujar_texto(
+                    frame,
+                    texto,
+                    (ancho - 350, 40),
+                    color=(0, 255, 0),
+                    font_scale=0.7,
+                    thickness=2,
+                    font_path=font_path_ui,
+                )
+                if camara_en_movimiento:
+                    motivo_overlay = razon_movimiento or ""
+                    if motivo_overlay.startswith("monitor"):
+                        sub = motivo_overlay.split(":", 1)[1] if ":" in motivo_overlay else "global"
+                        if sub.startswith("zoom"):
+                            msg = "CÁMARA EN MOVIMIENTO (zoom detectado)"
+                        else:
+                            msg = "CÁMARA EN MOVIMIENTO (monitor global)"
+                    elif motivo_overlay == "rafaga":
+                        msg = "CÁMARA EN MOVIMIENTO (ráfaga de blobs)"
+                    elif motivo_overlay == "anomalia":
+                        msg = "CÁMARA EN MOVIMIENTO (detecciones masivas)"
+                    elif motivo_overlay == "anomalia_posible_dron":
+                        msg = "CÁMARA EN MOVIMIENTO (exceso posible_dron)"
+                    else:
+                        msg = "CÁMARA EN MOVIMIENTO"
+                    dibujar_texto(
+                        frame,
+                        msg,
+                        (20, 40),
+                        color=(0, 0, 255),
+                        font_scale=0.6,
+                        thickness=2,
+                        font_path=font_path_ui,
+                    )
+                    if motivo_overlay.startswith("monitor") and diagnostico_camara:
+                        sub = motivo_overlay.split(":", 1)[1] if ":" in motivo_overlay else "global"
+                        if sub.startswith("zoom"):
+                            diag_msg = (
+                                f"Escala x{diagnostico_camara.factor_escala:.3f} "
+                                f"diff={diagnostico_camara.ratio_pixeles:.2f}"
+                            )
+                        else:
+                            diag_msg = (
+                                f"Δpx={diagnostico_camara.desplazamiento_medio:.1f} "
+                                f"pts={diagnostico_camara.puntos_validos}/{diagnostico_camara.total_puntos}"
+                            )
+                        dibujar_texto(
+                            frame,
+                            diag_msg,
+                            (20, 65),
+                            color=(0, 0, 255),
+                            font_scale=0.55,
+                            thickness=1,
+                            font_path=font_path_ui,
+                        )
 
         else:
             # Pausado: mostrar frame estático
@@ -505,7 +779,40 @@ def main() -> None:
                  # Info overlay
                  if Config.MOSTRAR_UI:
                      texto = f"Frame {indice_frame_actual}/{total_frames} - objs: {len(ultimos_tracks)} (PAUSA)"
-                     cv2.putText(frame, texto, (ancho - 450, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                     dibujar_texto(
+                         frame,
+                         texto,
+                         (ancho - 450, 40),
+                         color=(0, 255, 255),
+                         font_scale=0.7,
+                         thickness=2,
+                         font_path=font_path_ui,
+                     )
+                     if camara_en_movimiento:
+                         motivo_overlay = razon_movimiento or ""
+                         if motivo_overlay.startswith("monitor"):
+                             sub = motivo_overlay.split(":", 1)[1] if ":" in motivo_overlay else "global"
+                             if sub.startswith("zoom"):
+                                 msg = "CÁMARA EN MOVIMIENTO (zoom detectado)"
+                             else:
+                                 msg = "CÁMARA EN MOVIMIENTO (monitor global)"
+                         elif motivo_overlay == "rafaga":
+                             msg = "CÁMARA EN MOVIMIENTO (ráfaga de blobs)"
+                         elif motivo_overlay == "anomalia":
+                             msg = "CÁMARA EN MOVIMIENTO (detecciones masivas)"
+                         elif motivo_overlay == "anomalia_posible_dron":
+                             msg = "CÁMARA EN MOVIMIENTO (exceso posible_dron)"
+                         else:
+                             msg = "CÁMARA EN MOVIMIENTO"
+                         dibujar_texto(
+                             frame,
+                             msg,
+                             (20, 40),
+                             color=(0, 0, 255),
+                             font_scale=0.6,
+                             thickness=2,
+                             font_path=font_path_ui,
+                         )
 
             else:
                 frame = np.zeros((alto, ancho, 3), dtype=np.uint8)

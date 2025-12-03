@@ -61,6 +61,7 @@ class DetectorMovimiento:
         min_frames_vivos: int = 3,
         min_desplazamiento: int = 6,
         max_frames_sin_match: int = 60,
+        max_detecciones: int = 200,
     ) -> None:
         self.umbral_diff = umbral_diff
         self.min_area = min_area
@@ -71,6 +72,8 @@ class DetectorMovimiento:
         self.min_frames_vivos = min_frames_vivos
         self.min_desplazamiento = min_desplazamiento
         self.max_frames_sin_match = max_frames_sin_match
+        self.max_detecciones = max(0, max_detecciones)
+        self._ultimo_total_detecciones = 0
 
         self._prev_gray: Optional[np.ndarray] = None
         self._candidatos: Dict[int, CandidatoMovimiento] = {}
@@ -229,7 +232,7 @@ class DetectorMovimiento:
         self._actualizar_candidatos(blobs)
         self._prev_gray = gray_act
 
-        detecciones: List[Detection] = []
+        detecciones_priorizadas: List[tuple[int, float, Detection]] = []
 
         for cand in self._candidatos.values():
             # Tiene que haber vivido cierto nº de frames
@@ -256,6 +259,36 @@ class DetectorMovimiento:
                 "velocidad_px": cand.velocidad_media,
                 "frames_vivos": cand.frames_vivos,
             }
-            detecciones.append(det)
+            prioridad_area = det["area_px"]
+            detecciones_priorizadas.append(
+                (cand.frames_vivos, prioridad_area, det)
+            )
 
-        return detecciones
+        self._ultimo_total_detecciones = len(detecciones_priorizadas)
+
+        if not detecciones_priorizadas:
+            return []
+
+        if self.max_detecciones and len(detecciones_priorizadas) > self.max_detecciones:
+            detecciones_priorizadas.sort(
+                key=lambda tpl: (tpl[0], tpl[1]), reverse=True
+            )
+            seleccion = detecciones_priorizadas[: self.max_detecciones]
+        else:
+            seleccion = detecciones_priorizadas
+
+        return [tpl[2] for tpl in seleccion]
+
+    @property
+    def ultimo_conteo_detecciones(self) -> int:
+        return self._ultimo_total_detecciones
+
+    def resetear(self) -> None:
+        """
+        Limpia el estado interno para forzar que el siguiente frame
+        vuelva a inicializar la referencia sin generar falsos positivos.
+        """
+        self._prev_gray = None
+        self._candidatos.clear()
+        self._siguiente_id = 1
+        self._ultimo_total_detecciones = 0

@@ -24,8 +24,11 @@ def _cargar_modelo(ruta_pesos: str = "yolo11n.pt"):
     """
     global _MODEL, _WARMED_UP
     if _MODEL is None:
-        LOGGER.info("Cargando modelo YOLO desde %s (modo CPU).", ruta_pesos)
+        import torch
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        LOGGER.info("Cargando modelo YOLO desde %s (dispositivo: %s).", ruta_pesos, device)
         _MODEL = YOLO(ruta_pesos)
+        _MODEL.to(device)  # Forzar uso de GPU si está disponible
         _WARMED_UP = False
 
     if not _WARMED_UP:

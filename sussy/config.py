@@ -46,6 +46,35 @@ class Config:
     MOVIMIENTO_MIN_FRAMES = 3
     MOVIMIENTO_MIN_DESPLAZAMIENTO = 5
     MOVIMIENTO_CROP_PADDING_PCT = 0.3  # Aumenta recortes de movimiento para contexto adicional
+    MOVIMIENTO_MAX_DETECCIONES = 120    # Límite de blobs por frame para evitar saturación
+    MOVIMIENTO_RAFAGA_BLOBS = 80        # Si se supera, asumimos sacudida (auto pausa)
+    MOVIMIENTO_RAFAGA_FRAMES = 2        # Frames de enfriamiento tras detectar ráfaga
+    MOVIMIENTO_RAFAGA_FRAMES_ACTIVACION = 2  # Frames consecutivos con ráfaga antes de pausar
+    MOVIMIENTO_ANOMALIA_TOTAL = 160     # Si hay más detecciones totales, se considera anomalía
+    MOVIMIENTO_ANOMALIA_POSIBLE_DRON = 8   # Nº máximo de posible_dron simultáneos
+    MOVIMIENTO_ANOMALIA_FRAMES_ACTIVACION = 1
+    MOVIMIENTO_ANOMALIA_FRAMES_ENFRIAMIENTO = 3
+
+    # ==========================================
+    # ESTABILIDAD DE LA CÁMARA
+    # ==========================================
+    USAR_MONITOR_ESTABILIDAD = True
+    CAMARA_ESCALA_ANALISIS = 0.5
+    CAMARA_MAX_DESPLAZAMIENTO_PX = 7.0
+    CAMARA_MIN_PUNTOS = 60
+    CAMARA_MAX_RATIO_PERDIDOS = 0.55
+    CAMARA_FRAMES_INESTABLES = 3
+    CAMARA_FRAMES_ESTABLES = 4
+    CAMARA_ACTIVACION_INMEDIATA = True
+    CAMARA_MAX_CAMBIO_ESCALA = 0.04
+    CAMARA_MAX_RATIO_DIFERENCIA = 0.35
+    CAMARA_ZOOM_COOLDOWN_FRAMES = 12
+    CAMARA_ZOOM_FAST_RATIO = 0.25
+
+    # ==========================================
+    # UI / TEXTO
+    # ==========================================
+    UI_FONT_PATH = None  # Ruta opcional a un .ttf; si es None se auto-detecta (ej. Arial en Windows)
 
     # ==========================================
     # DETECCIÓN (YOLO / IA)
