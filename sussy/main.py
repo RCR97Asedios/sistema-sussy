@@ -15,7 +15,12 @@ from sussy.core.estado_alerta import GestorEstadoDeteccion
 from sussy.core.eventos import GestorEventos
 from sussy.core.fuentes import normalizar_source, abrir_fuente_video
 from sussy.core.movimiento import DetectorMovimiento
-from sussy.core.presets import aplicar_preset_camara, presets_disponibles
+from sussy.core.presets import (
+    aplicar_preset_camara,
+    aplicar_preset_rendimiento,
+    presets_disponibles,
+    presets_rendimiento_disponibles,
+)
 from sussy.core.relevancia import EvaluadorRelevancia
 from sussy.core.seguimiento import TrackerSimple
 from sussy.core.prediccion import PredictorMovimiento
@@ -26,6 +31,7 @@ from sussy.core.estabilidad_camara import MonitorEstabilidadCamara, DiagnosticoE
 from sussy.core.texto import dibujar_texto
 
 PRESETS_CAMARA_DISPONIBLES = presets_disponibles()
+PRESETS_RENDIMIENTO_DISPONIBLES = presets_rendimiento_disponibles()
 
 
 def parse_args() -> argparse.Namespace:
@@ -47,8 +53,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--skip",
         type=int,
-        default=1,
-        help="Procesar solo 1 de cada N fotogramas (por defecto 1 = todos).",
+        default=None,
+        help=(
+            "Procesar solo 1 de cada N fotogramas. "
+            "Si no se indica, se usa Config.SKIP_FRAMES_DEFECTO (ajustable por preset)."
+        ),
     )
     parser.add_argument(
         "--log-csv",
@@ -64,6 +73,16 @@ def parse_args() -> argparse.Namespace:
             help=(
                 "Preset rápido de cámara (fija/orientable/movil/movil_plus). "
                 "Sobrescribe Config antes de iniciar el pipeline."
+            ),
+        )
+    if PRESETS_RENDIMIENTO_DISPONIBLES:
+        parser.add_argument(
+            "--perf-preset",
+            type=str,
+            choices=PRESETS_RENDIMIENTO_DISPONIBLES,
+            help=(
+                "Preset de rendimiento (minimo/equilibrado/maximo) para ajustar coste "
+                "computacional: modelo, skip de frames y filtros IA."
             ),
         )
     return parser.parse_args()
@@ -189,6 +208,26 @@ def main() -> None:
         except (ValueError, AttributeError) as exc:
             LOGGER.error("No se pudo aplicar el preset de cámara '%s': %s", preset_nombre, exc)
             return
+
+    preset_rend_nombre = getattr(args, "perf_preset", None) or Config.RENDIMIENTO_PRESET_POR_DEFECTO
+    preset_rend_aplicado = None
+    if preset_rend_nombre:
+        overrides_cfg_rend = getattr(Config, "RENDIMIENTO_PRESET_OVERRIDES", None)
+        overrides_rend = dict(overrides_cfg_rend) if isinstance(overrides_cfg_rend, dict) and overrides_cfg_rend else None
+        try:
+            preset_rend_aplicado = aplicar_preset_rendimiento(preset_rend_nombre, overrides=overrides_rend)
+            print(f"Preset de rendimiento seleccionado: {preset_rend_aplicado.nombre}")
+            print(f" - {preset_rend_aplicado.descripcion}")
+            if overrides_rend:
+                claves = ", ".join(sorted(overrides_rend.keys()))
+                print(f"Overrides manuales aplicados: {claves}")
+        except (ValueError, AttributeError) as exc:
+            LOGGER.error("No se pudo aplicar el preset de rendimiento '%s': %s", preset_rend_nombre, exc)
+            return
+
+    skip_frames = args.skip if args.skip is not None else getattr(Config, "SKIP_FRAMES_DEFECTO", 1)
+    if skip_frames < 1:
+        skip_frames = 1
 
     print("Sistema Sussy – pipeline básico (INGESTA → DETECCIÓN → TRACKING → VISUALIZACIÓN)")
     fuente_cli = args.source or args.video
@@ -534,7 +573,7 @@ def main() -> None:
                 ultimos_tracks = []
                 rafaga_consecutiva = 0
                 anomalia_consecutiva = 0
-            elif indice_frame_actual % args.skip == 0:
+            elif indice_frame_actual % skip_frames == 0:
                 detecciones_yolo = []
                 if Config.USAR_YOLO:
                     detecciones_yolo = detectar(

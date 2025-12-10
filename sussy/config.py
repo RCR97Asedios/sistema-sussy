@@ -31,6 +31,13 @@ class Config:
     CAMARA_PRESET_OVERRIDES = {}      # Dict opcional para forzar ajustes aun usando preset
 
     # ==========================================
+    # PRESETS DE RENDIMIENTO
+    # ==========================================
+    RENDIMIENTO_PRESET_POR_DEFECTO = None  # Ej: "minimo", "equilibrado", "maximo"
+    RENDIMIENTO_PRESET_OVERRIDES = {}      # Ajustes manuales sobre el preset elegido
+    SKIP_FRAMES_DEFECTO = 1                # N de frames a saltar por defecto (se puede forzar por preset)
+
+    # ==========================================
     # FUENTES DE VÍDEO / INGESTA
     # ==========================================
     FUENTE_POR_DEFECTO = None  # Ruta, RTSP, HTTP o índice de webcam. Se puede sobreescribir con --source

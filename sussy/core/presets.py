@@ -11,6 +11,13 @@ class PresetCamara:
     descripcion: str
     ajustes: Dict[str, Any]
 
+@dataclass(frozen=True)
+class PresetRendimiento:
+    clave: str
+    nombre: str
+    descripcion: str
+    ajustes: Dict[str, Any]
+
 
 PRESETS_CAMARA: Dict[str, PresetCamara] = {
     "fija": PresetCamara(
@@ -18,17 +25,17 @@ PRESETS_CAMARA: Dict[str, PresetCamara] = {
         nombre="Cámara Fija",
         descripcion=(
             "Posición estática sin movimientos ni zoom. "
-            "Desactiva cualquier análisis de movimiento propio para ahorrar recursos."
+            "Desactiva cualquier protección de movimiento de cámara para ahorrar recursos."
         ),
         ajustes={
-            "USAR_DETECTOR_MOVIMIENTO": False,
+            "USAR_DETECTOR_MOVIMIENTO": True,
             "USAR_MONITOR_ESTABILIDAD": False,
-            "USAR_PREDICCION_MOVIMIENTO": False,
+            "USAR_PREDICCION_MOVIMIENTO": True,
             "CAMARA_ZOOM_FAST_RATIO": 0.0,
-            "CAMARA_ZOOM_COOLDOWN_FRAMES": 0,
-            "MOVIMIENTO_RAFAGA_BLOBS": 0,
-            "MOVIMIENTO_ANOMALIA_TOTAL": 0,
-            "MOVIMIENTO_ANOMALIA_POSIBLE_DRON": 0,
+            "CAMARA_ZOOM_COOLDOWN_FRAMES": Config.CAMARA_ZOOM_COOLDOWN_FRAMES,
+            "MOVIMIENTO_RAFAGA_BLOBS": Config.MOVIMIENTO_RAFAGA_BLOBS,
+            "MOVIMIENTO_ANOMALIA_TOTAL": Config.MOVIMIENTO_ANOMALIA_TOTAL,
+            "MOVIMIENTO_ANOMALIA_POSIBLE_DRON": Config.MOVIMIENTO_ANOMALIA_POSIBLE_DRON,
         },
     ),
     "orientable": PresetCamara(
@@ -81,10 +88,50 @@ PRESETS_CAMARA: Dict[str, PresetCamara] = {
     ),
 }
 
+PRESETS_RENDIMIENTO: Dict[str, PresetRendimiento] = {
+    "minimo": PresetRendimiento(
+        clave="minimo",
+        nombre="Rendimiento mínimo",
+        descripcion=(
+            "Minimiza consumo: modelo ligero y más skip de frames."
+        ),
+        ajustes={
+            "YOLO_MODELO": "yolo11n.pt",
+            "SKIP_FRAMES_DEFECTO": 3,
+        },
+    ),
+    "equilibrado": PresetRendimiento(
+        clave="equilibrado",
+        nombre="Rendimiento equilibrado",
+        descripcion=(
+            "Balancea coste y calidad: modelo ligero y ligero salto de frames."
+        ),
+        ajustes={
+            "YOLO_MODELO": "yolo11n.pt",
+            "SKIP_FRAMES_DEFECTO": 2,
+        },
+    ),
+    "maximo": PresetRendimiento(
+        clave="maximo",
+        nombre="Rendimiento máximo",
+        descripcion=(
+            "Calidad máxima: modelo grande y sin salto de frames."
+        ),
+        ajustes={
+            "YOLO_MODELO": "yolo11x.pt",
+            "SKIP_FRAMES_DEFECTO": 1,
+        },
+    ),
+}
+
 
 def presets_disponibles() -> List[str]:
     """Devuelve la lista de claves disponibles para argparse u otras UIs."""
     return sorted(PRESETS_CAMARA.keys())
+
+def presets_rendimiento_disponibles() -> List[str]:
+    """Lista de presets de rendimiento disponibles."""
+    return sorted(PRESETS_RENDIMIENTO.keys())
 
 
 def aplicar_preset_camara(
@@ -100,6 +147,33 @@ def aplicar_preset_camara(
         raise ValueError(f"Preset de cámara desconocido: {nombre}")
 
     preset = PRESETS_CAMARA[clave]
+    ajustes = dict(preset.ajustes)
+    if overrides:
+        ajustes.update(overrides)
+
+    for atributo, valor in ajustes.items():
+        if not hasattr(Config, atributo):
+            raise AttributeError(
+                f"El atributo '{atributo}' definido en el preset '{preset.nombre}' no existe en Config."
+            )
+        setattr(Config, atributo, valor)
+
+    return preset
+
+
+def aplicar_preset_rendimiento(
+    nombre: str,
+    overrides: Optional[Dict[str, Any]] = None,
+) -> PresetRendimiento:
+    """
+    Sobrescribe dinamicamente atributos de Config según el preset de rendimiento.
+    Pensado para ajustar coste computacional variando modelo y skip de frames.
+    """
+    clave = (nombre or "").lower()
+    if clave not in PRESETS_RENDIMIENTO:
+        raise ValueError(f"Preset de rendimiento desconocido: {nombre}")
+
+    preset = PRESETS_RENDIMIENTO[clave]
     ajustes = dict(preset.ajustes)
     if overrides:
         ajustes.update(overrides)

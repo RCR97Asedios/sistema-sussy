@@ -5,6 +5,7 @@ from typing import Dict, List, Optional
 
 import cv2
 
+from sussy.config import Config
 from sussy.core.ingesta import frames_desde_video
 
 
@@ -27,8 +28,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--out-dir",
-        required=True,
-        help="Carpeta de salida donde se guardarán las imágenes recortadas.",
+        required=False,
+        default=Config.RUTA_DATASET_CAPTURE,
+        help=(
+            "Carpeta de salida de las imágenes recortadas. "
+            "Por defecto usa Config.RUTA_DATASET_CAPTURE para coincidir con los crops online."
+        ),
     )
     parser.add_argument(
         "--cada",
