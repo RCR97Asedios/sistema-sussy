@@ -145,6 +145,7 @@ class Config:
     BACKEND_TIMEOUT = 3.0            # Timeout de peticiones REST
     SIMULAR_EVENTOS_EN_LOG = True    # Si no hay backend, al menos dejar constancia en logs
 
+
     # ==========================================
     # MEJORAS (filtro IA + dataset)
     # ==========================================
