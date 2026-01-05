@@ -1,12 +1,17 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 
 import logging
+import os
 import numpy as np
 from ultralytics import YOLO
 
+from sussy.core.backends import BackendInfo, detectar_backends, describir_backends
+from sussy.core.onnx_inference import ONNXDetector
+
 # Modelo global (se carga solo una vez)
-_MODEL = None
+_MODEL: Optional[Union[YOLO, ONNXDetector]] = None
 _WARMED_UP = False
+_BACKEND_INFO: Optional[BackendInfo] = None
 
 # Tamaño de entrada para YOLO: más grande = mejor para objetos pequeños (a costa de CPU)
 _IMG_SIZE = 1280
@@ -19,35 +24,175 @@ LOGGER = logging.getLogger("sussy.deteccion")
 
 def _cargar_modelo(ruta_pesos: str = "yolo11n.pt"):
     """
-    Carga el modelo YOLO una sola vez y ejecuta un warmup rápido para estabilizar
-    los tiempos de inferencia posteriores.
+    Carga el modelo YOLO una sola vez usando el mejor backend disponible
+    según las preferencias. Aplica warmup ligero para estabilizar tiempos.
     """
-    global _MODEL, _WARMED_UP
+    global _MODEL, _WARMED_UP, _BACKEND_INFO
+    from sussy.config import Config
+
     if _MODEL is None:
-        import torch
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        LOGGER.info("Cargando modelo YOLO desde %s (dispositivo: %s).", ruta_pesos, device)
-        _MODEL = YOLO(ruta_pesos)
-        _MODEL.to(device)  # Forzar uso de GPU si está disponible
+        preferencias = getattr(Config, "BACKENDS_PREFERIDOS", ["cuda", "onnx", "cpu"])
+        backend_forzado = getattr(Config, "BACKEND_FORZADO", None)
+        if backend_forzado:
+            preferencias = [backend_forzado] + [p for p in preferencias if p != backend_forzado]
+
+        backend_preferido, backends_disponibles = detectar_backends(
+            preferencias=preferencias,
+            modelo_pt=ruta_pesos,
+            modelo_onnx_cfg=getattr(Config, "YOLO_MODELO_ONNX", None),
+        )
+
+        if backend_preferido is None:
+            msg = f"No hay backend de inferencia disponible. Revisar dependencias. Detectados: {describir_backends(backends_disponibles)}"
+            LOGGER.error(msg)
+            raise RuntimeError(msg)
+
+        # Ordenar candidatos según preferencias para permitir fallback
+        ordenados: List[BackendInfo] = []
+        for pref in preferencias:
+            ordenados.extend([c for c in backends_disponibles if c.nombre == pref and c not in ordenados])
+        ordenados.extend([c for c in backends_disponibles if c not in ordenados])
+
+        errores = []
+
+        for backend in ordenados:
+            try:
+        LOGGER.info(
+                    "Intentando backend: %s (%s). Otros disponibles: %s",
+                    backend.nombre,
+                    backend.descripcion,
+                    describir_backends([c for c in ordenados if c != backend]),
+                )
+
+                imgsz = getattr(Config, "YOLO_IMG_SIZE", _IMG_SIZE)
+
+                if backend.tipo == "onnx":
+                    # Usar nuestro detector ONNX directo para forzar DML
+                    modelo = ONNXDetector(
+                        model_path=backend.modelo_path,
+                        input_size=imgsz,
+                        providers=None,  # Auto-detecta DML/CUDA/CPU
+                    )
+                    LOGGER.info("ONNX cargado con provider: %s", modelo.active_provider)
+                else:
+                    # Backend Torch (CUDA/MPS/CPU)
+                    modelo = YOLO(backend.modelo_path)
+
+                    if backend.tipo == "torch":
+            import torch  # type: ignore
+
+                        modelo.to(backend.dispositivo)
+
+                        if getattr(Config, "YOLO_HALF", False) and str(backend.dispositivo).startswith("cuda"):
+                try:
+                                modelo.model.half()  # type: ignore[attr-defined]
+                    LOGGER.info("Modelo en FP16")
+                except Exception as exc:  # pragma: no cover
+                    LOGGER.warning("No se pudo activar FP16: %s", exc)
+
+            try:
+                torch.backends.cudnn.benchmark = True  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
+                _MODEL = modelo
+                _BACKEND_INFO = backend
+
+                if backend.tipo == "onnx":
+                    # ONNXDetector ya hace warmup internamente
+                    _WARMED_UP = True
+                else:
+                    _ejecutar_warmup(_MODEL, strict=True)
+                    _WARMED_UP = True
+                break
+            except Exception as exc:  # pragma: no cover - queremos seguir probando
+                errores.append(f"{backend.nombre}: {exc}")
+                LOGGER.warning("Fallo al inicializar backend %s -> %s. Probando siguiente.", backend.nombre, exc)
+                _MODEL = None
+                _BACKEND_INFO = None
         _WARMED_UP = False
 
-    if not _WARMED_UP:
-        _ejecutar_warmup(_MODEL)
-        _WARMED_UP = True
+        if _MODEL is None or _BACKEND_INFO is None:
+            msg = f"No se pudo inicializar ningún backend. Errores: {errores}"
+            LOGGER.error(msg)
+            raise RuntimeError(msg)
 
     return _MODEL
 
 
-def _ejecutar_warmup(modelo: YOLO) -> None:
+def precargar_modelo(ruta_pesos: str = "yolo11n.pt") -> None:
+    """Precarga el modelo YOLO (descarga y warmup)."""
+    _cargar_modelo(ruta_pesos)
+
+
+def exportar_modelo_onnx(
+    ruta_pesos: str = "yolo11n.pt",
+    imgsz: Optional[int] = None,
+    ruta_salida: Optional[str] = None,
+) -> str:
+    """
+    Exporta el modelo YOLO a ONNX para habilitar runtimes alternativos (ORT/DirectML).
+    - imgsz: si es None, usa Config.YOLO_IMG_SIZE.
+    - ruta_salida: opcional para mover el archivo resultante.
+    Retorna la ruta final del archivo .onnx generado.
+    """
+    from sussy.config import Config
+
+    imgsz = imgsz or getattr(Config, "YOLO_IMG_SIZE", _IMG_SIZE)
+
+    LOGGER.info("Exportando modelo %s a ONNX (imgsz=%s)...", ruta_pesos, imgsz)
+    modelo = YOLO(ruta_pesos)
+    salida_generada = modelo.export(format="onnx", imgsz=imgsz, half=getattr(Config, "YOLO_HALF", False))
+
+    if ruta_salida and salida_generada and salida_generada != ruta_salida:
+        try:
+            os.replace(salida_generada, ruta_salida)
+            salida_generada = ruta_salida
+        except Exception as exc:
+            LOGGER.warning("No se pudo mover el ONNX a %s: %s", ruta_salida, exc)
+
+    LOGGER.info("ONNX generado en: %s", salida_generada)
+    return salida_generada
+
+
+def backend_activo() -> Optional[BackendInfo]:
+    """Devuelve la información del backend actualmente en uso."""
+    return _BACKEND_INFO
+
+
+if __name__ == "__main__":
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(description="Utilidades de detección Sussy (YOLO).")
+    parser.add_argument("--export-onnx", action="store_true", help="Exporta el modelo a ONNX y termina.")
+    parser.add_argument("--pesos", type=str, default="yolo11n.pt", help="Ruta al modelo .pt")
+    parser.add_argument("--imgsz", type=int, default=None, help="Resolución cuadrada para export (ej. 640/1280)")
+    parser.add_argument("--salida", type=str, default=None, help="Ruta destino para el .onnx (opcional)")
+
+    args = parser.parse_args()
+
+    if args.export_onnx:
+        ruta = exportar_modelo_onnx(args.pesos, imgsz=args.imgsz, ruta_salida=args.salida)
+        print(f"ONNX exportado en: {ruta}")
+        sys.exit(0)
+
+    print("Nada que hacer. Usa --export-onnx para exportar el modelo.")
+
+
+def _ejecutar_warmup(modelo: YOLO, strict: bool = False) -> None:
     """
     Realiza una inferencia sobre un frame vacío para inicializar kernels.
-    Cualquier error en esta fase se informa pero no detiene la app.
+    Cualquier error en esta fase se informa; si strict=True se relanza para permitir fallback.
     """
     try:
-        frame_dummy = np.zeros((_IMG_SIZE, _IMG_SIZE, 3), dtype=np.uint8)
+        from sussy.config import Config
+
+        imgsz = getattr(Config, "YOLO_IMG_SIZE", _IMG_SIZE)
+        frame_dummy = np.zeros((imgsz, imgsz, 3), dtype=np.uint8)
         modelo.predict(
             frame_dummy,
-            imgsz=_IMG_SIZE,
+            imgsz=imgsz,
             conf=0.01,
             iou=0.25,
             verbose=False,
@@ -55,6 +200,8 @@ def _ejecutar_warmup(modelo: YOLO) -> None:
         LOGGER.debug("Warmup YOLO completado.")
     except Exception as exc:  # pragma: no cover - solo informativo
         LOGGER.warning("No se pudo ejecutar el warmup de YOLO: %s", exc)
+        if strict:
+            raise
 
 
 def detectar(frame: np.ndarray, conf_umbral: float = 0.5, modelo_path: str = "yolo11n.pt", clases_permitidas: List[str] = None) -> List[Detection]:
@@ -67,15 +214,33 @@ def detectar(frame: np.ndarray, conf_umbral: float = 0.5, modelo_path: str = "yo
     Devolvemos SIEMPRE una lista de dicts con:
       x1, y1, x2, y2, clase (string), score (float)
     """
+    from sussy.config import Config
+
     model = _cargar_modelo(modelo_path)
+
+    # Si es ONNXDetector, usar su método detect() directamente
+    if isinstance(model, ONNXDetector):
+        return model.detect(
+            frame,
+            conf_threshold=conf_umbral,
+            iou_threshold=0.50,
+            classes_filter=clases_permitidas,
+        )
+
+    # Backend Torch (Ultralytics YOLO)
+    imgsz = getattr(Config, "YOLO_IMG_SIZE", _IMG_SIZE)
+    max_det = getattr(Config, "YOLO_MAX_DET", 300)
+    vid_stride = getattr(Config, "YOLO_VID_STRIDE", 1)
 
     # Llamada a YOLO
     results = model(
         frame,
-        imgsz=_IMG_SIZE,
+        imgsz=imgsz,
         conf=conf_umbral,
         iou=0.50,
         verbose=False,
+        max_det=max_det,
+        vid_stride=vid_stride,
     )
 
     detecciones: List[Detection] = []

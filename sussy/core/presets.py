@@ -93,21 +93,27 @@ PRESETS_RENDIMIENTO: Dict[str, PresetRendimiento] = {
         clave="minimo",
         nombre="Rendimiento mínimo",
         descripcion=(
-            "Minimiza consumo: modelo ligero y más skip de frames."
+            "Minimiza consumo: modelo ligero, skip agresivo y menor imgsz."
         ),
         ajustes={
             "YOLO_MODELO": "yolo11n.pt",
+            "YOLO_IMG_SIZE": 640,
             "SKIP_FRAMES_DEFECTO": 3,
+            "USAR_DETECTOR_MOVIMIENTO": False,
+            "USAR_MONITOR_ESTABILIDAD": False,
+            "USAR_FILTRO_IA_EN_MOVIMIENTO": False,
+            "GUARDAR_CROPS_ENTRENAMIENTO": False,
         },
     ),
     "equilibrado": PresetRendimiento(
         clave="equilibrado",
         nombre="Rendimiento equilibrado",
         descripcion=(
-            "Balancea coste y calidad: modelo ligero y ligero salto de frames."
+            "Balancea coste y calidad: modelo ligero, imgsz medio y skip moderado."
         ),
         ajustes={
             "YOLO_MODELO": "yolo11n.pt",
+            "YOLO_IMG_SIZE": 960,
             "SKIP_FRAMES_DEFECTO": 2,
         },
     ),
@@ -119,7 +125,25 @@ PRESETS_RENDIMIENTO: Dict[str, PresetRendimiento] = {
         ),
         ajustes={
             "YOLO_MODELO": "yolo11x.pt",
+            "YOLO_IMG_SIZE": 1280,
             "SKIP_FRAMES_DEFECTO": 1,
+        },
+    ),
+    "ultraligero": PresetRendimiento(
+        clave="ultraligero",
+        nombre="Ultraligero (edge)",
+        descripcion=(
+            "Para CPUs/NPU débiles: modelo nano, imgsz pequeño y skip alto."
+        ),
+        ajustes={
+            "YOLO_MODELO": "yolo11n.pt",
+            "YOLO_IMG_SIZE": 512,
+            "SKIP_FRAMES_DEFECTO": 4,
+            "USAR_MONITOR_ESTABILIDAD": False,
+            "USAR_DETECTOR_MOVIMIENTO": False,
+            "USAR_PREDICCION_MOVIMIENTO": False,
+            "USAR_FILTRO_IA_EN_MOVIMIENTO": False,
+            "GUARDAR_CROPS_ENTRENAMIENTO": False,
         },
     ),
 }

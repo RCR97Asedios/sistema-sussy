@@ -87,6 +87,7 @@ class SussyPipeline:
         )
         self.gestor_estado: Optional["GestorEstadoDeteccion"] = None  # type: ignore
         self.logger: Optional[RegistradorCSV] = None
+        self.media_inferencia_ms: float = 0.0
 
         # Flags de movimiento/estado de cámara
         self.camara_en_movimiento = False
@@ -241,8 +242,12 @@ class SussyPipeline:
         if not self.camara_en_movimiento and (self.indice_frame_actual % self.skip_frames == 0):
             tracks, eventos = self._procesar_frame(frame)
             self.ultimos_tracks = tracks
-        else:
+        elif self.camara_en_movimiento:
+            # Si la cámara se mueve, vaciamos tracks para evitar arrastres
             self.ultimos_tracks = []
+        else:
+            # Frame saltado por skip: mantenemos los últimos tracks para no perderlos visualmente
+            tracks = self.ultimos_tracks
 
         # Anotar frame si se solicita
         frame_out = frame.copy()
@@ -431,12 +436,20 @@ class SussyPipeline:
         """Ejecuta detección+tracking+eventos sobre un frame."""
         detecciones_yolo: List[Dict[str, Any]] = []
         if Config.USAR_YOLO:
+            import time
+
+            t0 = time.perf_counter()
             detecciones_yolo = detectar(
                 frame,
                 conf_umbral=Config.YOLO_CONF_UMBRAL,
                 modelo_path=Config.YOLO_MODELO,
                 clases_permitidas=Config.YOLO_CLASES_PERMITIDAS,
             ) or []
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            if self.media_inferencia_ms == 0.0:
+                self.media_inferencia_ms = elapsed_ms
+            else:
+                self.media_inferencia_ms = self.media_inferencia_ms * 0.8 + elapsed_ms * 0.2
 
         # Zonas anticipadas
         if self.predictor_movimiento:
@@ -487,13 +500,21 @@ class SussyPipeline:
 
         # Filtro IA sobre blobs de movimiento huérfanos + guardado de crops
         nuevas_detecciones_ia: List[Dict[str, Any]] = []
+        usar_filtro_mov = Config.USAR_FILTRO_IA_EN_MOVIMIENTO
+        if (
+            usar_filtro_mov
+            and getattr(Config, "AUTO_DESACTIVAR_FILTRO_IA", False)
+            and self.media_inferencia_ms > getattr(Config, "LIMITE_MS_INFERENCIA", 120.0)
+        ):
+            usar_filtro_mov = False
+
         for d_mov in detecciones_mov:
             solapa_yolo = any(calcular_iou(d_mov, d_yolo) > 0.1 for d_yolo in detecciones_yolo)
             if solapa_yolo:
                 continue
 
             detectado_en_crop = None
-            if Config.USAR_FILTRO_IA_EN_MOVIMIENTO:
+            if usar_filtro_mov:
                 detectado_en_crop = analizar_recorte(
                     frame,
                     d_mov["x1"],

@@ -33,9 +33,9 @@ class Config:
     # ==========================================
     # PRESETS DE RENDIMIENTO
     # ==========================================
-    RENDIMIENTO_PRESET_POR_DEFECTO = None  # Ej: "minimo", "equilibrado", "maximo"
+    RENDIMIENTO_PRESET_POR_DEFECTO = "minimo"  # Ej: "minimo", "equilibrado", "maximo"
     RENDIMIENTO_PRESET_OVERRIDES = {}      # Ajustes manuales sobre el preset elegido
-    SKIP_FRAMES_DEFECTO = 1                # N de frames a saltar por defecto (se puede forzar por preset)
+    SKIP_FRAMES_DEFECTO = 3                # N de frames a saltar por defecto (se puede forzar por preset)
 
     # ==========================================
     # FUENTES DE VÍDEO / INGESTA
@@ -92,8 +92,16 @@ class Config:
     # ==========================================
     # DETECCIÓN (YOLO / IA)
     # ==========================================
+    BACKENDS_PREFERIDOS = ["onnx", "cuda", "cpu"]  # ONNX primero para RTX 5080 sin binarios CUDA
+    BACKEND_FORZADO = "onnx"                       # Fuerza ONNX Runtime (evita PyTorch CUDA sm_120)
+    YOLO_MODELO_ONNX = None                        # Ruta opcional a .onnx (fallback ONNX Runtime)
     YOLO_MODELO = "yolo11x.pt"
-    YOLO_CONF_UMBRAL = 0.5
+    YOLO_IMG_SIZE = 960           # Tamaño de entrada para YOLO (px lado mayor) - 960 es buen balance velocidad/precisión
+    YOLO_DEVICE = None            # "cuda", "cpu", "mps", "auto"/None
+    YOLO_HALF = False             # FP16 si la GPU lo soporta
+    YOLO_MAX_DET = 300            # Límite de detecciones por frame
+    YOLO_VID_STRIDE = 1           # stride para vídeo; >1 baja coste
+    YOLO_CONF_UMBRAL = 0.35
     YOLO_CLASES_PERMITIDAS = [
         "person",
         "bicycle", "car", "motorcycle", "bus", "truck",
@@ -152,5 +160,9 @@ class Config:
     USAR_FILTRO_IA_EN_MOVIMIENTO = True
     GUARDAR_CROPS_ENTRENAMIENTO = True
     RUTA_DATASET_CAPTURE = "data/dataset_capture"
+
+    # Auto-tuning según coste observado
+    AUTO_DESACTIVAR_FILTRO_IA = True
+    LIMITE_MS_INFERENCIA = 120.0  # desactiva filtro IA en movimiento si la media supera este valor
 
 

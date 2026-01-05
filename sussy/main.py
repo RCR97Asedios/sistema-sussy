@@ -4,7 +4,19 @@ from typing import Optional
 
 import cv2
 import numpy as np
+import time
 
+try:
+    import psutil  # type: ignore
+except ImportError:
+    psutil = None
+
+try:
+    import torch  # type: ignore
+except ImportError:
+    torch = None
+
+from sussy.core.deteccion import precargar_modelo, backend_activo
 from sussy.config import Config
 from sussy.core.entorno import configurar_entorno_privado
 from sussy.core.pipeline import (
@@ -132,10 +144,73 @@ def dibujar_ui(frame, pausado, frame_actual, total_frames):
     }
 
 
+def muestrear_rendimiento(cache: dict, intervalo: float = 1.0) -> dict:
+    """
+    Devuelve métricas básicas de rendimiento con cacheo ligero para no
+    penalizar el loop de visualización.
+    """
+    ahora = time.monotonic()
+    if cache and (ahora - cache.get("ts", 0) < intervalo):
+        return cache
+
+    cpu = psutil.cpu_percent(interval=None) if psutil else None
+    mem = psutil.virtual_memory().percent if psutil else None
+
+    gpu_txt = None
+    if torch and torch.cuda.is_available():
+        try:
+            idx = torch.cuda.current_device()
+            props = torch.cuda.get_device_properties(idx)
+            mem_total = props.total_memory
+            mem_usada = torch.cuda.memory_allocated(idx)
+            gpu_txt = f"GPU {props.name}: {mem_usada/1e9:.1f}/{mem_total/1e9:.1f} GB"
+        except Exception:
+            gpu_txt = "GPU disponible"
+
+    cache = {"ts": ahora, "cpu": cpu, "mem": mem, "gpu": gpu_txt}
+    return cache
+
+
+def dibujar_rendimiento(frame, ancho, alto, cache_rend):
+    cache_rend = muestrear_rendimiento(cache_rend)
+
+    partes = []
+    if cache_rend.get("cpu") is not None:
+        partes.append(f"CPU: {cache_rend['cpu']:.0f}%")
+    if cache_rend.get("mem") is not None:
+        partes.append(f"RAM: {cache_rend['mem']:.0f}%")
+    if cache_rend.get("gpu"):
+        partes.append(cache_rend["gpu"])
+
+    if not partes:
+        return cache_rend
+
+    texto = " | ".join(partes)
+    dibujar_texto(
+        frame,
+        texto,
+        (20, alto - 20),
+        color=(0, 255, 0),
+        font_scale=0.6,
+        thickness=2,
+        font_path=Config.UI_FONT_PATH,
+    )
+
+    return cache_rend
+
+
 def main() -> None:
     args = parse_args()
 
     print("Sistema Sussy – pipeline básico (INGESTA → DETECCIÓN → TRACKING → VISUALIZACIÓN)")
+    try:
+        precargar_modelo(Config.YOLO_MODELO)
+        bk = backend_activo()
+        if bk:
+            LOGGER.info("Backend de inferencia activo: %s (%s)", bk.nombre, bk.descripcion)
+            print(f"Backend de IA: {bk.nombre} – {bk.descripcion}")
+    except Exception as exc:
+        LOGGER.warning("No se pudo precargar el modelo: %s", exc)
     fuente_cli = args.source or args.video
     if args.video and not args.source:
         LOGGER.warning("El argumento --video quedará obsoleto; usa --source en su lugar.")
@@ -177,6 +252,7 @@ def main() -> None:
     areas_ui = {}
     peticion_busqueda = -1
     resultado_actual: Optional[FrameResult] = None
+    cache_rend = {}
     
     def callback_raton(event, x, y, flags, param):
         nonlocal pausado, peticion_busqueda
@@ -256,6 +332,9 @@ def main() -> None:
 
         # Dibujar UI propia (timeline + play/pause)
         areas_ui = dibujar_ui(frame, pausado, indice_frame_actual, total_frames)
+
+        # Métricas de rendimiento (esquina inferior izquierda)
+        cache_rend = dibujar_rendimiento(frame, ancho, alto, cache_rend)
 
         cv2.imshow(ventana, frame)
         
