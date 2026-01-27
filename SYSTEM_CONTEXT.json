@@ -1,0 +1,206 @@
+{
+  "_meta": {
+    "version": "2.0.0",
+    "last_updated": "2026-01-27",
+    "purpose": "Context for the Sistema Sussy detection core. Read PROJECT_CONTEXT.json first for general overview.",
+    "ai_instructions": [
+      "This file contains details about the detection system implementation",
+      "After modifying code here, ALWAYS sync to Laboratorio de Sussy",
+      "The app uses the COPY at Laboratorio de Sussy/vendor/sussy/, NOT this folder directly"
+    ]
+  },
+
+  "overview": {
+    "description": "Core detection engine combining YOLO AI detection with classical motion detection",
+    "main_package": "sussy/",
+    "entry_point": "sussy/main.py (CLI) or import sussy.core.pipeline",
+    "virtual_env": ".venv/"
+  },
+
+  "core_modules": {
+    "config.py": {
+      "purpose": "Centralized configuration for all parameters",
+      "key_settings": [
+        "YOLO_MODELO / YOLO_MODELO_ONNX - Model paths",
+        "YOLO_IMG_SIZE - Input resolution (640)",
+        "YOLO_CONF_UMBRAL - Confidence threshold (0.35)",
+        "YOLO_CLASES_PERMITIDAS - Allowed class names in Spanish",
+        "CLASES_ALERTA - Classes that trigger alerts (dron, pajaro, avion)"
+      ],
+      "important": "This is the SOURCE config. Laboratorio uses a COPY."
+    },
+    "core/deteccion.py": {
+      "purpose": "YOLO detection wrapper with backend selection",
+      "key_functions": [
+        "detectar() - Main detection function",
+        "_cargar_modelo() - Loads model with best available backend",
+        "analizar_recorte() - Analyzes cropped regions"
+      ],
+      "backend_priority": ["onnx", "cuda", "cpu"],
+      "note": "Supports automatic fallback if preferred backend fails"
+    },
+    "core/onnx_inference.py": {
+      "purpose": "Direct ONNX Runtime inference with DML/CUDA support",
+      "class": "ONNXDetector",
+      "key_methods": [
+        "_get_class_names() - Loads class names from ONNX metadata or Config",
+        "detect() - Runs inference on a frame",
+        "preprocess() / postprocess() - Image preprocessing and NMS"
+      ],
+      "providers_priority": ["DmlExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"],
+      "dml_config": "device_id=1 (uses NVIDIA GPU, not Intel integrated)",
+      "resolved_issue_2026_01_27": "Class names now loaded from model metadata or Config instead of hardcoded COCO names"
+    },
+    "core/pipeline.py": {
+      "purpose": "Main orchestrator - coordinates detection, motion, tracking, alerts",
+      "class": "SussyPipeline",
+      "flow": [
+        "1. Read frame from source",
+        "2. Run YOLO detection",
+        "3. Run motion detection (if enabled)",
+        "4. Combine detections",
+        "5. Update tracker",
+        "6. Generate alerts if needed"
+      ]
+    },
+    "core/movimiento.py": {
+      "purpose": "Classical motion detection using frame differencing",
+      "class": "DetectorMovimiento",
+      "algorithm": "Background subtraction + blob detection",
+      "output": "Bounding boxes of moving objects not identified by YOLO"
+    },
+    "core/seguimiento.py": {
+      "purpose": "Object tracking across frames",
+      "class": "TrackerSimple",
+      "features": [
+        "IoU and distance-based assignment",
+        "Movement prediction",
+        "Class stabilization (prevents class flickering)",
+        "Optional Re-ID for objects that leave and re-enter"
+      ]
+    },
+    "core/presets.py": {
+      "purpose": "Predefined configurations for different use cases",
+      "camera_presets": ["fija", "orientable", "movil", "movil_plus"],
+      "performance_presets": ["ultraligero", "rapido", "equilibrado", "calidad", "maximo"],
+      "resolved_issue_2026_01_27": "Performance presets NO LONGER override YOLO_MODELO - model stays as configured in config.py"
+    },
+    "core/backends.py": {
+      "purpose": "Backend detection and selection logic",
+      "detects": ["CUDA availability", "ONNX Runtime providers", "DirectML support"]
+    },
+    "core/apariencia.py": {
+      "purpose": "Visual appearance extraction for Re-ID",
+      "extractors": ["simple (color histogram)", "multiescala (more robust, slower)"]
+    }
+  },
+
+  "detection_flow": {
+    "step1_load_model": {
+      "function": "_cargar_modelo() in deteccion.py",
+      "tries": ["ONNX with DML/CUDA", "PyTorch with CUDA", "PyTorch CPU"],
+      "model_source": "Config.YOLO_MODELO or Config.YOLO_MODELO_ONNX"
+    },
+    "step2_inference": {
+      "onnx_path": "ONNXDetector.detect() -> preprocess -> session.run -> postprocess",
+      "torch_path": "YOLO model.predict()"
+    },
+    "step3_class_mapping": {
+      "onnx": "Class IDs mapped via self.names dict (from metadata or Config)",
+      "torch": "Class IDs mapped via model.names dict"
+    },
+    "step4_filtering": {
+      "by_confidence": "Config.YOLO_CONF_UMBRAL (default 0.35)",
+      "by_class": "Config.YOLO_CLASES_PERMITIDAS"
+    }
+  },
+
+  "model_configuration": {
+    "current_model": "fase1_5_v1",
+    "config_location": "config.py lines 127-130",
+    "paths": {
+      "YOLO_MODELO": "../Entrenamiento/modelos/fase1_5_v1/weights/best.pt",
+      "YOLO_MODELO_ONNX": "../Entrenamiento/exports/fase1_5_v1.onnx"
+    },
+    "class_names": ["persona", "dron", "vehiculo_civil", "vehiculo_militar", "pajaro", "avion"],
+    "to_switch_models": "Edit YOLO_MODELO and YOLO_MODELO_ONNX in config.py, then sync"
+  },
+
+  "resolved_issues": [
+    {
+      "date": "2026-01-27",
+      "issue": "ONNX class names hardcoded as COCO English names",
+      "file": "core/onnx_inference.py",
+      "symptom": "Detections filtered out because 'person' != 'persona'",
+      "root_cause": "_get_coco_names() returned English COCO class names regardless of model",
+      "fix": "Replaced with _get_class_names() that reads from ONNX metadata or Config.YOLO_CLASES_PERMITIDAS",
+      "verification": "Check logs for 'Nombres de clases cargados desde metadata ONNX' or 'desde Config'"
+    },
+    {
+      "date": "2026-01-27",
+      "issue": "Performance presets overriding model with pretrained yolo11n.pt",
+      "file": "core/presets.py",
+      "symptom": "Log showed 'Modelo cambió de fase1_5_v1 a yolo11n.pt'",
+      "root_cause": "PRESETS_RENDIMIENTO had YOLO_MODELO hardcoded",
+      "fix": "Removed YOLO_MODELO from all performance presets",
+      "verification": "Presets only change YOLO_IMG_SIZE and module toggles, not the model"
+    }
+  ],
+
+  "things_to_watch": [
+    {
+      "topic": "Code synchronization",
+      "warning": "Changes here do NOT affect the running app until synced",
+      "action": "Always run sync script after modifying any .py file"
+    },
+    {
+      "topic": "ONNX opset compatibility",
+      "warning": "ONNX Runtime may not support latest opsets",
+      "current_opset": 17,
+      "action": "When re-exporting ONNX, use opset=17 parameter"
+    },
+    {
+      "topic": "DML device selection",
+      "location": "core/onnx_inference.py line 68-72",
+      "current": "device_id=1 selects NVIDIA GPU",
+      "warning": "If GPU order changes, detection may use wrong GPU"
+    },
+    {
+      "topic": "Default parameter values",
+      "warning": "Many functions have yolo11n.pt as default, but Config overrides this",
+      "example": "detectar(modelo_path='yolo11n.pt') - the actual model comes from Config"
+    }
+  ],
+
+  "training_integration": {
+    "training_folder": "../Entrenamiento/",
+    "training_module": "sussy/training/",
+    "scripts": {
+      "entrenar.py": "CLI for training new models",
+      "backend_entrenamiento.py": "Training backend with Ultralytics",
+      "extractor_frames.py": "Extract frames from videos for annotation"
+    },
+    "workflow": [
+      "1. Extract frames from videos using extractor_frames.py",
+      "2. Annotate with CVAT or similar tool",
+      "3. Export to YOLO format",
+      "4. Train using entrenar.py or Ultralytics directly",
+      "5. Export to ONNX with opset 17",
+      "6. Update config.py with new model path",
+      "7. Sync to Laboratorio"
+    ]
+  },
+
+  "dependencies": {
+    "core": ["numpy", "opencv-python", "ultralytics"],
+    "onnx": ["onnxruntime-directml"],
+    "training": ["fiftyone (optional, for COCO download)"],
+    "known_conflict": "fiftyone installs numpy 2.x which causes warnings with onnxruntime"
+  },
+
+  "sync_command": {
+    "powershell": "\"S\" | & \"Sistema Sussy\\.venv\\Scripts\\python.exe\" \"Laboratorio de Sussy\\scripts\\sync_sussy_core.py\"",
+    "from_project_root": true,
+    "what_it_does": "Copies entire sussy/ folder to Laboratorio de Sussy/vendor/sussy/"
+  }
+}

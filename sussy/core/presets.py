@@ -89,15 +89,16 @@ PRESETS_CAMARA: Dict[str, PresetCamara] = {
 }
 
 PRESETS_RENDIMIENTO: Dict[str, PresetRendimiento] = {
+    # NOTA: Los presets NO modifican YOLO_MODELO ni YOLO_MODELO_ONNX
+    # El modelo se configura en config.py y los presets solo ajustan rendimiento
     "ultraligero": PresetRendimiento(
         clave="ultraligero",
-        nombre="Ultraligero (GPU)",
+        nombre="Ultraligero",
         descripcion=(
-            "Máxima velocidad: modelo nano en GPU. ~50+ FPS"
+            "Máxima velocidad: menos módulos activos. ~50+ FPS"
         ),
         ajustes={
-            "YOLO_MODELO": "yolo11n.pt",
-            "YOLO_IMG_SIZE": 512,  # yolo11n.onnx exportado a 512
+            "YOLO_IMG_SIZE": 512,
             "SKIP_FRAMES_DEFECTO": 2,
             "USAR_DETECTOR_MOVIMIENTO": False,
             "USAR_PREDICCION_MOVIMIENTO": False,
@@ -106,13 +107,12 @@ PRESETS_RENDIMIENTO: Dict[str, PresetRendimiento] = {
     ),
     "rapido": PresetRendimiento(
         clave="rapido",
-        nombre="Rápido (GPU)",
+        nombre="Rápido",
         descripcion=(
-            "Buena velocidad con modelo nano en GPU. ~30-40 FPS"
+            "Buena velocidad con detección de movimiento. ~30-40 FPS"
         ),
         ajustes={
-            "YOLO_MODELO": "yolo11n.pt",
-            "YOLO_IMG_SIZE": 512,  # Usar el mismo tamaño del ONNX
+            "YOLO_IMG_SIZE": 640,
             "SKIP_FRAMES_DEFECTO": 1,
             "USAR_DETECTOR_MOVIMIENTO": True,
             "USAR_PREDICCION_MOVIMIENTO": False,
@@ -121,26 +121,24 @@ PRESETS_RENDIMIENTO: Dict[str, PresetRendimiento] = {
     ),
     "equilibrado": PresetRendimiento(
         clave="equilibrado",
-        nombre="Equilibrado (GPU)",
+        nombre="Equilibrado",
         descripcion=(
-            "Balance velocidad/precisión con modelo grande. ~15-25 FPS"
+            "Balance velocidad/precisión. ~15-25 FPS"
         ),
         ajustes={
-            "YOLO_MODELO": "yolo11x.pt",
-            "YOLO_IMG_SIZE": 960,  # yolo11x.onnx exportado a 960
+            "YOLO_IMG_SIZE": 640,
             "SKIP_FRAMES_DEFECTO": 2,
             "USAR_DETECTOR_MOVIMIENTO": True,
         },
     ),
     "calidad": PresetRendimiento(
         clave="calidad",
-        nombre="Alta calidad (GPU)",
+        nombre="Alta calidad",
         descripcion=(
-            "Mayor precisión con modelo grande. ~10-15 FPS"
+            "Mayor precisión con más módulos activos. ~10-15 FPS"
         ),
         ajustes={
-            "YOLO_MODELO": "yolo11x.pt",
-            "YOLO_IMG_SIZE": 960,
+            "YOLO_IMG_SIZE": 640,
             "SKIP_FRAMES_DEFECTO": 1,
             "USAR_DETECTOR_MOVIMIENTO": True,
             "USAR_PREDICCION_MOVIMIENTO": True,
@@ -148,13 +146,12 @@ PRESETS_RENDIMIENTO: Dict[str, PresetRendimiento] = {
     ),
     "maximo": PresetRendimiento(
         clave="maximo",
-        nombre="Máxima precisión (GPU)",
+        nombre="Máxima precisión",
         descripcion=(
             "Calidad máxima, todos los módulos activos. ~5-10 FPS"
         ),
         ajustes={
-            "YOLO_MODELO": "yolo11x.pt",
-            "YOLO_IMG_SIZE": 960,
+            "YOLO_IMG_SIZE": 640,
             "SKIP_FRAMES_DEFECTO": 1,
             "USAR_DETECTOR_MOVIMIENTO": True,
             "USAR_PREDICCION_MOVIMIENTO": True,

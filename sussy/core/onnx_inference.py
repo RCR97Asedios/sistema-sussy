@@ -119,16 +119,56 @@ class ONNXDetector:
                 LOGGER.warning("No se pudo habilitar IO Binding: %s", e)
                 self._use_io_binding = False
 
-        # Cargar nombres de clases COCO (YOLO usa estos por defecto)
-        self.names = self._get_coco_names()
+        # Cargar nombres de clases: primero intentar desde el modelo ONNX, luego Config
+        self.names = self._get_class_names()
 
         # Pool de threads para preprocesamiento paralelo
         self._preprocess_executor = ThreadPoolExecutor(max_workers=2)
         self._pending_preprocess = None
         self._preprocess_lock = threading.Lock()
 
-    def _get_coco_names(self) -> Dict[int, str]:
-        """Nombres de clases COCO estándar."""
+    def _get_class_names(self) -> Dict[int, str]:
+        """
+        Obtiene los nombres de clases del modelo.
+        Prioridad:
+        1. Metadata del modelo ONNX (si el modelo los tiene embebidos)
+        2. Config.YOLO_CLASES_PERMITIDAS (modelo personalizado)
+        3. Nombres COCO estándar (fallback para modelos preentrenados)
+        """
+        # 1. Intentar extraer nombres del metadata del modelo ONNX
+        try:
+            metadata = self.session.get_modelmeta()
+            if metadata and metadata.custom_metadata_map:
+                # Ultralytics guarda los nombres en 'names' como string de dict
+                names_str = metadata.custom_metadata_map.get('names', '')
+                if names_str:
+                    import ast
+                    names_dict = ast.literal_eval(names_str)
+                    if isinstance(names_dict, dict) and len(names_dict) > 0:
+                        # Convertir claves a int si son strings
+                        result = {int(k): str(v) for k, v in names_dict.items()}
+                        LOGGER.info("Nombres de clases cargados desde metadata ONNX: %s", result)
+                        return result
+        except Exception as e:
+            LOGGER.debug("No se pudieron extraer nombres del metadata ONNX: %s", e)
+        
+        # 2. Usar Config.YOLO_CLASES_PERMITIDAS si está definido
+        try:
+            from sussy.config import Config
+            clases = getattr(Config, 'YOLO_CLASES_PERMITIDAS', None)
+            if clases and isinstance(clases, list) and len(clases) > 0:
+                result = {i: nombre for i, nombre in enumerate(clases)}
+                LOGGER.info("Nombres de clases cargados desde Config: %s", result)
+                return result
+        except Exception as e:
+            LOGGER.debug("No se pudo cargar Config.YOLO_CLASES_PERMITIDAS: %s", e)
+        
+        # 3. Fallback: nombres COCO estándar (para modelos preentrenados)
+        LOGGER.info("Usando nombres de clases COCO estándar (fallback)")
+        return self._get_coco_names_fallback()
+    
+    def _get_coco_names_fallback(self) -> Dict[int, str]:
+        """Nombres de clases COCO estándar como fallback."""
         return {
             0: "person", 1: "bicycle", 2: "car", 3: "motorcycle", 4: "airplane",
             5: "bus", 6: "train", 7: "truck", 8: "boat", 9: "traffic light",

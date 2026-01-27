@@ -69,10 +69,13 @@ class Config:
     MOVIMIENTO_ANOMALIA_FRAMES_ENFRIAMIENTO = 5  # Subido de 3 a 5
     
     # Filtro de contención: descartar blobs dentro de objetos YOLO
-    CLASES_CON_MOVIMIENTO_INTERNO = [
-        "person", "car", "motorcycle", "bus", "truck", "bicycle",
-        "bird", "dog", "cat", "horse", "cow", "elephant", "bear"
-    ]
+    # Para modelo PREENTRENADO (COCO):
+    # CLASES_CON_MOVIMIENTO_INTERNO = [
+    #     "person", "car", "motorcycle", "bus", "truck", "bicycle",
+    #     "bird", "dog", "cat", "horse", "cow", "elephant", "bear"
+    # ]
+    # Para modelo Fase 1.5 (ACTIVA):
+    CLASES_CON_MOVIMIENTO_INTERNO = ["persona", "vehiculo_civil", "vehiculo_militar", "pajaro", "avion"]
     MOVIMIENTO_MARGEN_CONTENCION = 0.15   # Margen extra alrededor del objeto YOLO (15%)
     MOVIMIENTO_UMBRAL_CONTENCION = 0.6    # Proporción del blob que debe estar contenido (60%)
     
@@ -107,24 +110,43 @@ class Config:
     # ==========================================
     BACKENDS_PREFERIDOS = ["onnx", "cuda", "cpu"]  # ONNX primero para RTX 5080 sin binarios CUDA
     BACKEND_FORZADO = "onnx"                       # Fuerza ONNX Runtime (evita PyTorch CUDA sm_120)
-    YOLO_MODELO_ONNX = None                        # Ruta opcional a .onnx (fallback ONNX Runtime)
-    YOLO_MODELO = "yolo11x.pt"
-    YOLO_IMG_SIZE = 960           # Tamaño de entrada para YOLO (px lado mayor) - 960 es buen balance velocidad/precisión
+    
+    # =====================================================
+    # SELECCIÓN DE MODELO
+    # =====================================================
+    # Opción 1: Modelo PREENTRENADO (detecta 80 clases COCO - personas, coches, pájaros, etc.)
+    #           Mejor para uso general, webcam, vigilancia variada
+    # YOLO_MODELO = "yolo11n.pt"
+    # YOLO_MODELO_ONNX = None
+    
+    # Opción 2: Modelo PERSONALIZADO Fase 1 (solo 5 clases - NO RECOMENDADO)
+    #           *persona entrenada solo en contexto militar - NO funciona bien en webcam/oficina
+    # YOLO_MODELO = "../Entrenamiento/modelos/fase1_v1/weights/best.pt"
+    # YOLO_MODELO_ONNX = "../Entrenamiento/exports/fase1_v1.onnx"
+    
+    # Opción 3: Modelo PERSONALIZADO Fase 1.5 (6 clases: persona, dron, vehiculo_civil, vehiculo_militar, pajaro, avion)
+    #           Entrenado con COCO + datos propios - funciona en webcam Y contexto militar
+    YOLO_MODELO = "../Entrenamiento/modelos/fase1_5_v1/weights/best.pt"
+    YOLO_MODELO_ONNX = "../Entrenamiento/exports/fase1_5_v1.onnx"
+    
+    YOLO_IMG_SIZE = 640           # Tamaño de entrada para YOLO
     YOLO_DEVICE = None            # "cuda", "cpu", "mps", "auto"/None
     YOLO_HALF = False             # FP16 si la GPU lo soporta
     YOLO_MAX_DET = 300            # Límite de detecciones por frame
     YOLO_VID_STRIDE = 1           # stride para vídeo; >1 baja coste
     YOLO_CONF_UMBRAL = 0.35
-    YOLO_CLASES_PERMITIDAS = [
-        "person",
-        "bicycle", "car", "motorcycle", "bus", "truck",
-        "airplane", "bird", "drone"
-    ]
-    CLASES_ALERTA = [
-        "drone",
-        "bird",
-        "airplane",
-    ]  # Clases que gatillan estados de interés - QUITADO "posible_dron"
+    
+    # Clases para modelo PREENTRENADO (COCO) - Opción 1
+    # YOLO_CLASES_PERMITIDAS = [
+    #     "person",
+    #     "bicycle", "car", "motorcycle", "bus", "truck",
+    #     "airplane", "bird"
+    # ]
+    # CLASES_ALERTA = ["bird", "airplane"]
+    
+    # Clases para modelo Fase 1.5 - Opción 3 (ACTIVA)
+    YOLO_CLASES_PERMITIDAS = ["persona", "dron", "vehiculo_civil", "vehiculo_militar", "pajaro", "avion"]
+    CLASES_ALERTA = ["dron", "pajaro", "avion"]
 
     # ==========================================
     # TRACKER
